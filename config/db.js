@@ -1,13 +1,14 @@
 require("dotenv").config();
 const mongoose = require("mongoose");
 
-let isConnected = false;
-
 const FALLBACK_MONGO_URI =
   "mongodb+srv://rohanboddh9_db_user:JEkXWHKnUtqUG6cX@cluster0.2cdpohu.mongodb.net/employees?retryWrites=true&w=majority";
 
+let cachedPromise = null;
+
 const connectDB = async () => {
-  if (isConnected && mongoose.connection.readyState === 1) {
+  // If already connected, return existing connection immediately
+  if (mongoose.connection.readyState === 1) {
     return mongoose.connection;
   }
 
@@ -16,18 +17,23 @@ const connectDB = async () => {
     process.env.MONGODB_URI ||
     FALLBACK_MONGO_URI;
 
-  try {
-    const conn = await mongoose.connect(mongoURI, {
-      serverSelectionTimeoutMS: 10000,
-      bufferCommands: false, // Don't buffer operations if disconnected
-    });
-    isConnected = true;
-    console.log("🚀 MongoDB Connected successfully to:", conn.connection.host);
-    return conn;
-  } catch (err) {
-    console.error("❌ MongoDB Connection Error:", err.message);
-    throw err;
+  if (!cachedPromise) {
+    cachedPromise = mongoose
+      .connect(mongoURI, {
+        serverSelectionTimeoutMS: 15000,
+      })
+      .then((m) => {
+        console.log("🚀 MongoDB Connected successfully to:", m.connection.host);
+        return m.connection;
+      })
+      .catch((err) => {
+        cachedPromise = null;
+        console.error("❌ MongoDB Connection Error:", err.message);
+        throw err;
+      });
   }
+
+  return cachedPromise;
 };
 
 module.exports = connectDB;
