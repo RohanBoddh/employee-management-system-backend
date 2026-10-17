@@ -115,7 +115,7 @@ router.post("/reset-password", async (req, res) => {
    ===================== SIGNUP ========================
    ===================================================== */
 router.post("/signup", async (req, res) => {
-  const { email, password, name } = req.body;
+  const { email, password, name, role, position } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({
@@ -124,6 +124,7 @@ router.post("/signup", async (req, res) => {
   }
 
   const normalizedEmail = email.toLowerCase().trim();
+  const selectedRole = (role || position || "").trim();
 
   try {
     // Check if user already exists
@@ -137,49 +138,104 @@ router.post("/signup", async (req, res) => {
     // Check employee record
     let emp = await Employee.findOne({ email: normalizedEmail });
 
-    // If no employee exists yet, auto-create one so onboarding never fails!
-    // If it's the first employee or user, give them HR position
-    if (!emp) {
-      const totalEmpCount = await Employee.countDocuments();
-      const defaultPosition = totalEmpCount === 0 ? "HR" : "Employee";
-      const displayName =
-        name ||
-        normalizedEmail.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    // Determine final role/position
+    const finalRole = selectedRole
+      ? selectedRole
+      : (await Employee.countDocuments()) === 0
+      ? "HR"
+      : "Employee";
 
+    const displayName =
+      name ||
+      normalizedEmail.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+    // If no employee exists yet, create one
+    if (!emp) {
       emp = await Employee.create({
         name: displayName,
         email: normalizedEmail,
-        position: defaultPosition,
+        position: finalRole,
         phone: "",
         address: "",
         salary: 50000,
       });
+    } else if (selectedRole) {
+      emp.position = finalRole;
+      await emp.save();
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    const userRoleValue = finalRole.toLowerCase();
+
     if (existingUser) {
       existingUser.password = hashedPassword;
-      existingUser.position = emp.position;
+      existingUser.position = finalRole;
+      existingUser.role = userRoleValue;
       existingUser.name = emp.name;
       await existingUser.save();
     } else {
       await User.create({
         email: normalizedEmail,
         password: hashedPassword,
-        role: emp.position.toUpperCase() === "HR" ? "hr" : "employee",
-        position: emp.position,
+        role: userRoleValue,
+        position: finalRole,
         name: emp.name,
       });
     }
 
     res.status(201).json({
       message: "Signup successful",
+      role: userRoleValue,
+      position: finalRole,
     });
   } catch (err) {
     console.error("Signup error:", err);
     res.status(500).json({
       message: "Signup failed",
+      error: err.message,
+    });
+  }
+});
+
+/* =====================================================
+   ========= UPDATE ROLE / POSITION (SIMULATOR) =========
+   ===================================================== */
+router.post("/update-role", async (req, res) => {
+  const { email, role, position } = req.body;
+
+  if (!email || (!role && !position)) {
+    return res.status(400).json({ message: "Email and new role are required." });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const newRole = (role || position).trim();
+  const lowerRole = newRole.toLowerCase();
+
+  try {
+    const updatedUser = await User.findOneAndUpdate(
+      { email: normalizedEmail },
+      { role: lowerRole, position: newRole },
+      { new: true }
+    );
+
+    const updatedEmp = await Employee.findOneAndUpdate(
+      { email: normalizedEmail },
+      { position: newRole },
+      { new: true }
+    );
+
+    res.json({
+      message: `Role successfully updated to ${newRole}`,
+      role: lowerRole,
+      position: newRole,
+      user: updatedUser,
+      employee: updatedEmp,
+    });
+  } catch (err) {
+    console.error("Role update error:", err);
+    res.status(500).json({
+      message: "Failed to update role",
       error: err.message,
     });
   }
@@ -227,15 +283,19 @@ router.post("/login", async (req, res) => {
     const name = emp ? emp.name : user.name || normalizedEmail.split("@")[0];
 
     const access = ["Dashboard"];
-    if (position && position.toUpperCase() === "HR") {
+    const posUpper = (position || "").toUpperCase();
+    if (posUpper === "HR" || posUpper === "ADMIN") {
       access.push("Employees");
+    }
+    if (posUpper === "ADMIN") {
+      access.push("Reports");
     }
 
     res.json({
       message: "Login successful",
       email: user.email,
       name,
-      role: user.role,
+      role: user.role || (posUpper === "ADMIN" ? "admin" : (posUpper === "HR" ? "hr" : "employee")),
       position,
       access,
     });
