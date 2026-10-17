@@ -1,61 +1,68 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../config/db");
+const SupportReport = require("../models/SupportReport");
 const nodemailer = require("nodemailer");
 
 // Submit Report
 router.post("/submit-report", async (req, res) => {
   const { name, email, issue } = req.body;
 
+  if (!name || !email || !issue) {
+    return res.status(400).json({ error: "Name, email, and issue are required" });
+  }
+
   try {
-    await db.query(
-      "INSERT INTO support_reports (name, email, issue) VALUES (?, ?, ?)",
-      [name, email, issue]
-    );
-
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
+    const report = await SupportReport.create({
+      name,
+      email: email.toLowerCase().trim(),
+      issue,
     });
 
-    await transporter.sendMail({
-      from: email,
-      to: "hr@gmail.com",
-      subject: "New Employee Support Report",
-      text: `Name: ${name}\nEmail: ${email}\nIssue: ${issue}`,
-    });
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS,
+        },
+      });
 
-    res.status(200).json({ message: "Report submitted successfully" });
+      await transporter.sendMail({
+        from: email,
+        to: process.env.EMAIL_USER,
+        subject: "New Employee Support Report",
+        text: `Name: ${name}\nEmail: ${email}\nIssue: ${issue}`,
+      });
+    }
+
+    res.status(200).json({ message: "Report submitted successfully", report });
   } catch (err) {
-    console.log(err);
+    console.error("Support submit error:", err);
     res.status(500).json({ error: "Something went wrong" });
   }
 });
 
-// 🔥 ADD THIS GET ROUTE
+// GET all reports
 router.get("/all-reports", async (req, res) => {
   try {
-    const [rows] = await db.query(
-      "SELECT * FROM support_reports ORDER BY created_at DESC"
-    );
-    res.json(rows);
+    const reports = await SupportReport.find().sort({ createdAt: -1 });
+    res.json(reports);
   } catch (err) {
-    console.log(err);
+    console.error("Fetch reports error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
+// DELETE report
 router.delete("/delete-report/:id", async (req, res) => {
   const { id } = req.params;
 
   try {
-    await db.query("DELETE FROM support_reports WHERE id = ?", [id]);
+    const report = await SupportReport.findByIdAndDelete(id);
+    if (!report) return res.status(404).json({ error: "Report not found" });
     res.json({ message: "Report resolved and removed" });
   } catch (err) {
-    console.log(err);
+    console.error("Delete report error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

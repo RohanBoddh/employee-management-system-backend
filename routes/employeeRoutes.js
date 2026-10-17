@@ -1,7 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/employeeController");
-const db = require("../config/db");
+const Employee = require("../models/Employee");
+const User = require("../models/User");
 
 /* ===============================
    🔹 EMPLOYEE CRUD
@@ -10,109 +11,111 @@ const db = require("../config/db");
 // All employees
 router.get("/", controller.getEmployees);
 
-router.get("/email/:email", async (req, res) => {
-  try {
-    const { email } = req.params;
-
-    const [rows] = await db.query(
-      "SELECT * FROM employees WHERE email = ?",
-      [email]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    res.json(rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
+// Get employee by email
+router.get("/email/:email", controller.getEmployeeByEmail);
 
 // Add employee
 router.post("/", async (req, res) => {
-  const { name, email, position } = req.body;
+  const { name, email, position, phone, address, salary } = req.body;
+
+  if (!name || !email) {
+    return res.status(400).json({ error: "Name and email are required" });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
 
   try {
-    // 1️⃣ Employees table
-    await db.query(
-      `INSERT INTO employees (name, email, position)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE name=?, position=?`,
-      [name, email, position, name, position]
+    // 1️⃣ Upsert in Employee collection
+    const employee = await Employee.findOneAndUpdate(
+      { email: normalizedEmail },
+      {
+        name,
+        email: normalizedEmail,
+        position: position || "Employee",
+        phone: phone || "",
+        address: address || "",
+        salary: salary ? Number(salary) : 0,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    // 2️⃣ Users table (only HR)
+    // 2️⃣ Sync role in User collection if user exists or if position is HR
     if (position === "HR") {
-      await db.query(
-        `INSERT INTO users (email, role)
-         VALUES (?, 'HR')
-         ON DUPLICATE KEY UPDATE role='HR'`,
-        [email]
+      await User.findOneAndUpdate(
+        { email: normalizedEmail },
+        { role: "hr", position: "HR", name },
+        { upsert: false }
       );
     }
 
-    res.json({ success: true, message: "Employee saved & synced" });
+    res.json({ success: true, message: "Employee saved & synced", employee });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Save failed" });
+    console.error("Employee save error:", err);
+    res.status(500).json({ error: "Save failed", details: err.message });
   }
 });
 
-// Update employee
+// Update employee by ID
 router.put("/:id", async (req, res) => {
   const { id } = req.params;
-  const { name, email, position } = req.body;
+  const { name, email, position, phone, address, salary } = req.body;
 
   try {
-    await db.query(
-      "UPDATE employees SET name=?, email=?, position=? WHERE id=?",
-      [name, email, position, id]
+    const employee = await Employee.findByIdAndUpdate(
+      id,
+      {
+        name,
+        email: email ? email.toLowerCase().trim() : undefined,
+        position,
+        phone,
+        address,
+        salary: salary ? Number(salary) : 0,
+      },
+      { new: true }
     );
 
-    // HR sync
-    if (position === "HR") {
-      await db.query(
-        `INSERT INTO users (email, role)
-         VALUES (?, 'HR')
-         ON DUPLICATE KEY UPDATE role='HR'`,
-        [email]
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+
+    // Sync User record if position changed
+    if (employee.email) {
+      await User.findOneAndUpdate(
+        { email: employee.email },
+        {
+          role: position === "HR" ? "hr" : "employee",
+          position,
+          name: name || undefined,
+        }
       );
     }
 
-    res.json({ success: true, message: "Employee updated" });
+    res.json({ success: true, message: "Employee updated", employee });
   } catch (err) {
-    console.error(err);
+    console.error("Employee update error:", err);
     res.status(500).json({ error: "Update failed" });
   }
 });
 
-// Delete employee
+// Delete employee by ID
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
 
   try {
-    // email fetch (to delete from users if HR)
-    const [[emp]] = await db.query(
-      "SELECT email, position FROM employees WHERE id=?",
-      [id]
-    );
-
-    await db.query("DELETE FROM employees WHERE id=?", [id]);
+    const emp = await Employee.findByIdAndDelete(id);
 
     if (emp && emp.position === "HR") {
-      await db.query("DELETE FROM users WHERE email=?", [emp.email]);
+      await User.findOneAndDelete({ email: emp.email });
     }
 
     res.json({ success: true, message: "Employee deleted" });
   } catch (err) {
-    console.error(err);
+    console.error("Employee delete error:", err);
     res.status(500).json({ error: "Delete failed" });
   }
 });
 
-// ⚠️ ID route ALWAYS LAST
+// ID route always last
 router.get("/:id", controller.getEmployee);
 
 module.exports = router;

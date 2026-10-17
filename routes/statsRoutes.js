@@ -1,52 +1,44 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../config/db");
+const Employee = require("../models/Employee");
+const Attendance = require("../models/Attendance");
+
+const getTodayDateStr = () => new Date().toISOString().slice(0, 10);
 
 /* ===========================
    DASHBOARD STATS (HR)
 =========================== */
 router.get("/hr", async (req, res) => {
   try {
-    // ✅ Total HR employees (employees = source of truth)
-    const [[totalHR]] = await db.query(
-      "SELECT COUNT(*) AS totalHR FROM employees WHERE position='HR'"
-    );
+    const today = getTodayDateStr();
 
-    // ✅ Present HR today
-    const [[presentToday]] = await db.query(
-      `SELECT COUNT(*) AS presentToday
-       FROM attendance a
-       JOIN employees e ON e.id = a.employee_id
-       WHERE a.date = CURDATE()
-       AND a.status = 'Present'
-       AND e.position = 'HR'`
-    );
+    const hrEmployees = await Employee.find({ position: /^hr$/i }).select("_id");
+    const hrIds = hrEmployees.map((e) => e._id);
+    const totalHR = hrEmployees.length;
 
-    // ✅ Absent HR today
-    const [[absentToday]] = await db.query(
-      `SELECT COUNT(*) AS absentToday
-       FROM attendance a
-       JOIN employees e ON e.id = a.employee_id
-       WHERE a.date = CURDATE()
-       AND a.status = 'Absent'
-       AND e.position = 'HR'`
-    );
+    const presentCount = await Attendance.countDocuments({
+      date: today,
+      status: "Present",
+      employee_id: { $in: hrIds },
+    });
+
+    const absentCount = await Attendance.countDocuments({
+      date: today,
+      status: "Absent",
+      employee_id: { $in: hrIds },
+    });
 
     const absenteeRate =
-      totalHR.totalHR === 0
-        ? 0
-        : Math.round(
-            (absentToday.absentToday / totalHR.totalHR) * 100
-          );
+      totalHR === 0 ? 0 : Math.round((absentCount / totalHR) * 100);
 
     res.json({
-      totalHR: totalHR.totalHR,
-      presentToday: presentToday.presentToday,
-      absentToday: absentToday.absentToday,
+      totalHR,
+      presentToday: presentCount,
+      absentToday: absentCount,
       absenteeRate,
     });
   } catch (err) {
-    console.error(err);
+    console.error("Stats error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -56,14 +48,24 @@ router.get("/hr", async (req, res) => {
 =========================== */
 router.get("/employees/present", async (req, res) => {
   try {
-    const [rows] = await db.query(`
-      SELECT e.id, e.name, e.email, e.position
-      FROM attendance a
-      JOIN employees e ON a.employee_id = e.id
-      WHERE a.date = CURDATE()
-      AND a.status = 'Present'
-      AND e.position = 'HR'
-    `);
+    const today = getTodayDateStr();
+    const hrEmployees = await Employee.find({ position: /^hr$/i }).select("_id");
+    const hrIds = hrEmployees.map((e) => e._id);
+
+    const attendances = await Attendance.find({
+      date: today,
+      status: "Present",
+      employee_id: { $in: hrIds },
+    }).populate("employee_id");
+
+    const rows = attendances
+      .filter((a) => a.employee_id)
+      .map((a) => ({
+        id: a.employee_id._id.toString(),
+        name: a.employee_id.name,
+        email: a.employee_id.email,
+        position: a.employee_id.position,
+      }));
 
     res.json(rows);
   } catch (err) {
@@ -77,17 +79,25 @@ router.get("/employees/present", async (req, res) => {
 =========================== */
 router.get("/employees/absent", async (req, res) => {
   try {
-    const [rows] = await db.query(`
-      SELECT e.id, e.name, e.email, e.position
-      FROM employees e
-      WHERE e.position = 'HR'
-      AND e.id NOT IN (
-        SELECT employee_id
-        FROM attendance
-        WHERE date = CURDATE()
-        AND status = 'Present'
-      )
-    `);
+    const today = getTodayDateStr();
+    const presentAttendances = await Attendance.find({
+      date: today,
+      status: "Present",
+    }).select("employee_id");
+
+    const presentEmpIds = presentAttendances.map((a) => a.employee_id.toString());
+
+    const absentEmployees = await Employee.find({
+      position: /^hr$/i,
+      _id: { $nin: presentEmpIds },
+    });
+
+    const rows = absentEmployees.map((e) => ({
+      id: e._id.toString(),
+      name: e.name,
+      email: e.email,
+      position: e.position,
+    }));
 
     res.json(rows);
   } catch (err) {

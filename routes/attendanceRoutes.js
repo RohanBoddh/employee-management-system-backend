@@ -1,6 +1,9 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../config/db");
+const Attendance = require("../models/Attendance");
+const Employee = require("../models/Employee");
+
+const getTodayDateStr = () => new Date().toISOString().slice(0, 10);
 
 /* =====================================================
    ✅ MARK ATTENDANCE (Present / Absent)
@@ -14,23 +17,22 @@ router.post("/mark", async (req, res) => {
   }
 
   if (!["Present", "Absent"].includes(status)) {
-    return res.status(400).json({ message: "Invalid status" });
+    return res.status(400).json({ message: "Invalid status. Must be Present or Absent" });
   }
 
   try {
-    await db.query(
-      `
-      INSERT INTO attendance (employee_id, date, status)
-      VALUES (?, CURDATE(), ?)
-      ON DUPLICATE KEY UPDATE status = ?
-      `,
-      [employeeId, status, status]
+    const today = getTodayDateStr();
+
+    await Attendance.findOneAndUpdate(
+      { employee_id: employeeId, date: today },
+      { status },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
     res.json({ message: "Attendance marked successfully" });
   } catch (error) {
     console.error("Attendance error:", error);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 });
 
@@ -40,15 +42,21 @@ router.post("/mark", async (req, res) => {
 ===================================================== */
 router.get("/today/hr", async (req, res) => {
   try {
-    const [rows] = await db.query(`
-      SELECT a.employee_id, a.status
-      FROM attendance a
-      JOIN employees e ON e.id = a.employee_id
-      WHERE a.date = CURDATE()
-      AND e.position = 'HR'
-    `);
+    const today = getTodayDateStr();
+    const hrEmployees = await Employee.find({ position: /^hr$/i }).select("_id");
+    const hrIds = hrEmployees.map((e) => e._id);
 
-    res.json(rows);
+    const attendances = await Attendance.find({
+      date: today,
+      employee_id: { $in: hrIds },
+    });
+
+    const result = attendances.map((a) => ({
+      employee_id: a.employee_id.toString(),
+      status: a.status,
+    }));
+
+    res.json(result);
   } catch (error) {
     console.error("Today HR attendance error:", error);
     res.status(500).json({ message: "Server error" });
@@ -60,15 +68,22 @@ router.get("/today/hr", async (req, res) => {
 ===================================================== */
 router.get("/today/present", async (req, res) => {
   try {
-    const [rows] = await db.query(`
-      SELECT e.id, e.name, e.email, e.position
-      FROM attendance a
-      JOIN employees e ON e.id = a.employee_id
-      WHERE a.date = CURDATE()
-      AND a.status = 'Present'
-    `);
+    const today = getTodayDateStr();
+    const attendances = await Attendance.find({
+      date: today,
+      status: "Present",
+    }).populate("employee_id");
 
-    res.json(rows);
+    const result = attendances
+      .filter((a) => a.employee_id)
+      .map((a) => ({
+        id: a.employee_id._id.toString(),
+        name: a.employee_id.name,
+        email: a.employee_id.email,
+        position: a.employee_id.position,
+      }));
+
+    res.json(result);
   } catch (error) {
     console.error("Present employees error:", error);
     res.status(500).json({ message: "Server error" });
@@ -80,15 +95,22 @@ router.get("/today/present", async (req, res) => {
 ===================================================== */
 router.get("/today/absent", async (req, res) => {
   try {
-    const [rows] = await db.query(`
-      SELECT e.id, e.name, e.email, e.position
-      FROM attendance a
-      JOIN employees e ON e.id = a.employee_id
-      WHERE a.date = CURDATE()
-      AND a.status = 'Absent'
-    `);
+    const today = getTodayDateStr();
+    const attendances = await Attendance.find({
+      date: today,
+      status: "Absent",
+    }).populate("employee_id");
 
-    res.json(rows);
+    const result = attendances
+      .filter((a) => a.employee_id)
+      .map((a) => ({
+        id: a.employee_id._id.toString(),
+        name: a.employee_id.name,
+        email: a.employee_id.email,
+        position: a.employee_id.position,
+      }));
+
+    res.json(result);
   } catch (error) {
     console.error("Absent employees error:", error);
     res.status(500).json({ message: "Server error" });
