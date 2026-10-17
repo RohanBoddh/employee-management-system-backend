@@ -35,7 +35,7 @@ app.use(async (req, res, next) => {
     console.error("Database connection error in request:", err.message);
     return res.status(500).json({
       error: "Database connection failed",
-      message: "Please check your MONGO_URI in Vercel/environment variables.",
+      message: err.message,
     });
   }
 });
