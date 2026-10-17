@@ -35,7 +35,7 @@ router.post("/forgot-password", async (req, res) => {
 
     const frontendBase =
       process.env.FRONTEND_URL ||
-      "https://employee-management-system-frontend-liart.vercel.app";
+      "https://employee-management-system-frontend-peach.vercel.app";
     const resetLink = `${frontendBase}/reset-password/${token}`;
 
     if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
