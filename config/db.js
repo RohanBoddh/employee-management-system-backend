@@ -11,13 +11,16 @@ const connectDB = async () => {
   const mongoURI = process.env.MONGO_URI || process.env.MONGODB_URI;
 
   if (!mongoURI) {
-    console.warn("⚠️ Warning: MONGO_URI is not set in environment variables!");
-    return null;
+    const errorMsg =
+      "MONGO_URI environment variable is missing. Please add MONGO_URI in Vercel Project Settings -> Environment Variables.";
+    console.error("❌ " + errorMsg);
+    throw new Error(errorMsg);
   }
 
   try {
     const conn = await mongoose.connect(mongoURI, {
       serverSelectionTimeoutMS: 8000,
+      bufferCommands: false, // Don't buffer operations if disconnected
     });
     isConnected = true;
     console.log("🚀 MongoDB Connected successfully to:", conn.connection.host);
